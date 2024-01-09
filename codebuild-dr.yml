@@ -1,0 +1,130 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Resources:
+ CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: dr-cw-qa1-project
+#      ServiceRole: !GetAtt cw-qa-drCodeBuildRole.Arn
+#      ServiceRole: !Ref cw-qa-drCodeBuildProject
+      ServiceRole: "arn:aws:iam::427993235591:role/CodeBuild-Generic-Role"
+      Source:
+        Type: BITBUCKET
+        Location: "https://dbsync-devops@bitbucket.org/dbsync/cdm-release.git"
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              commands:
+                - wget -qO - https://raw.githubusercontent.com/yarnpkg/releases/gh-pages/debian/pubkey.gpg |  apt-key add -
+                - apt-get update --fix-missing && apt-get -y install python3-pip jq python2-dev git
+                - pip3 install awscli  
+                - apt-get update --fix-missing
+                - apt-get install mysql-client -y
+                - apt-get clean
+                - apt-get update 
+                - apt-get install -y ca-certificates-java
+                - apt-get clean
+                - update-ca-certificates -f 
+                - rm -rf /var/lib/apt/lists/* 
+                - which java
+                - nohup /usr/local/bin/dockerd --host=unix:///var/run/docker.sock --host=tcp://127.0.0.1:2375 --storage-driver=overlay2&
+                - timeout 15 sh -c "until docker info; do echo .; sleep 1; done"
+                - $(aws ecr get-login --region us-west-1 --no-include-email)
+            pre_build:
+              commands:
+                - mypath=$(pwd)
+                - pwd && ls -lrth
+                - git checkout release/cwqawest
+                - pwd
+                - ls -ltrh
+                - git branch
+                - pwd
+                - ls -ltrh
+                - aws s3 cp s3://dbsync-dev-deployment/versions/testtrainingcw-2023/VERSION . --region us-west-1
+                - perl -i -pe 's/v.\d+\.\d+\.\K(\d+)/ $1+1 /e' VERSION
+                - cp release-cdm/cloud-config/server.xml release-cdm/apache-tomcat-9.0.46/conf/server.xml
+                - cp release-cdm/apache-tomcat-9.0.46/conf/Catalina/dbsync.xml release-cdm/apache-tomcat-9.0.46/conf/Catalina/localhost/dbsync.xml
+                - cp release-cdm/cloud-config/system.properties release-cdm/apache-tomcat-9.0.46/dbsync-cdm/WEB-INF/db/conf/
+                - cp release-cdm/cloud-config/catalina.sh release-cdm/apache-tomcat-9.0.46/bin/catalina.sh
+                - cp release-cdm/cloud-config/run-recovery.sh release-cdm/apache-tomcat-9.0.46/scripts/
+                - cp release-cdm/cloud-config/run-recovery.bat release-cdm/apache-tomcat-9.0.46/scripts/
+                - cp release-cdm/cloud-config/setenv.sh release-cdm/apache-tomcat-9.0.46/bin/setenv.sh
+                - cp release-cdm/cloud-config/webapi-system.properties release-cdm/apache-tomcat-9.0.46/webapi/WEB-INF/conf/system.properties
+          #      - echo 'export set CATALINA_OPTS="-DconfigDir=cloud-config/ -Dapplication.deploy=cloud -DisFromLoadBalancer=true -Dstorage.type=s3 -Dreporting.server=https://dr-cw-qa.mydbsync.com.com/dbsync -Dappcenter.url=https://dr-cw-qa.mydbsync.com.com/appcenter -Dstorage.files.path=/cdm/temp/attachments/ -Daws.s3.prefix=s-"' > release-cdm/apache-tomcat-9.0.46/bin/setenv.sh
+                - chmod +x release-cdm/apache-tomcat-9.0.46/bin/setenv.sh
+                - cp release-cdm/apache-tomcat-9.0.46/conf/Catalina/scheduler.xml release-cdm/apache-tomcat-9.0.46/conf/Catalina/localhost/scheduler.xml
+          ###################################################################################################################################
+          
+                - sed -i 's/system\/scheduler/system\/cluster-mysql-scheduler/g' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/web.xml
+          
+                - cp release-cdm/cw-cloud-config/cluster-mysql-scheduler.properties release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/classes/com/mydbsync/system/cluster-mysql-scheduler.properties
+                - sed -i 's/${sch.db.url}/staging-db.avankia.com/g' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/classes/com/mydbsync/system/cluster-mysql-scheduler.properties
+                - sed -i 's/${sch.db.name}/qa-cdm_cw_scheduler/g' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/classes/com/mydbsync/system/cluster-mysql-scheduler.properties
+                - sed -i 's/${sch.db.uname}/dbsync/g' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/classes/com/mydbsync/system/cluster-mysql-scheduler.properties
+                - sed -i 's/${sch.db.pwd}/Avankia123/g' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/classes/com/mydbsync/system/cluster-mysql-scheduler.properties
+          
+                - cp release-cdm/cw-cloud-config/system.properties release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/conf/system.properties
+                - sed -i -e '$ascheduler.mode=cluster' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/conf/system.properties
+                - sed -i -e '$adbsync.logging=centralized' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/conf/system.properties
+             #   - sed -i -e '$aproccessdb.username=dbsync' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/conf/system.properties
+             #   - sed -i -e '$aproccessdb.password=Avankia123' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/conf/system.properties
+             #   - sed -i -e '$aproccessdb.dburl=jdbc:mysql://dr-staging-west-db.mydbsync.com:3306/dr_cw_proess_log_db?zeroDateTimeBehavior=convertToNull&autoReconnect=true' release-cdm/apache-tomcat-9.0.46/CloudWF/WEB-INF/conf/system.properties
+          
+          #      - cp release-cdm/cloud-config/setclasspath.sh release-cdm/apache-tomcat-9.0.46/bin/setclasspath.sh
+          
+           #      - cp release-cdm/cloud-config/setclasspath.sh release-cdm/apache-tomcat-9.0.46/bin/setclasspath.sh
+                - cp release-cdm/cw-cloud-config/cw.xml release-cdm/apache-tomcat-9.0.46/conf/Catalina/localhost/cw.xml
+          
+          ########################################################################################################################################
+          #      - sed -i '1iJAVA_OPTS="-Xms2048m -Xmx5500m"' release-cdm/apache-tomcat-9.0.46/bin/catalina.sh
+          
+                - sed -i -e 's/\r$//' release-cdm/apache-tomcat-9.0.46/bin/catalina.sh
+          
+                - $(aws ecr get-login --region us-west-1 --no-include-email)
+                
+          
+            build:
+              commands:
+                - docker build -t cloud-cdm:"$(cat ${mypath}/VERSION)" -f release-cdm/Dockerfile .
+                - docker tag cloud-cdm:"$(cat ${mypath}/VERSION)" 427993235591.dkr.ecr.us-west-1.amazonaws.com/dr-cwqa1-repo:"$(cat ${mypath}/VERSION)"
+                - docker tag cloud-cdm:"$(cat ${mypath}/VERSION)" 427993235591.dkr.ecr.us-west-1.amazonaws.com/dr-cwqa1-repo:latest
+          
+          
+            post_build:
+              commands:
+                - $(aws ecr get-login --region us-west-1 --no-include-email)
+                - docker push 427993235591.dkr.ecr.us-west-1.amazonaws.com/dr-cwqa1-repo:"$(cat ${mypath}/VERSION)"
+                - docker push 427993235591.dkr.ecr.us-west-1.amazonaws.com/dr-cwqa1-repo:latest
+                - aws s3 cp VERSION s3://dbsync-dev-deployment/versions/testtrainingcw-2023/VERSION --region us-west-1
+                - aws s3 cp s3://dbsync-dev-deployment/deployer/ecsdeploy .
+                - chmod 777 ecsdeploy
+                - ./ecsdeploy -c dr-cwqa1-cluster -n dr-cwqa1-service -i 427993235591.dkr.ecr.us-west-1.amazonaws.com/dr-cwqa1-repo:"$(cat ${mypath}/VERSION)"
+          
+          artifacts:
+            discard-paths: yes
+        GitCloneDepth: 1
+        InsecureSsl: false
+        ReportBuildStatus: true
+ #       SourceIdentifier: "Appcenter-bitbucket-source"
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:6.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: ENV_VAR1
+            Value: "value1"
+          - Name: ENV_VAR2
+            Value: "value2"
+      VpcConfig:
+          VpcId: vpc-0afc92fc7d9143f6b
+          Subnets:
+            - subnet-0fb3726f005f34339
+            - subnet-0653b49cfb053f821
+          SecurityGroupIds:
+            - sg-03f7ecb918ac927e9
+      Artifacts:
+        Type: NO_ARTIFACTS
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
